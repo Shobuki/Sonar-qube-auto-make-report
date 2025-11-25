@@ -1,5 +1,3 @@
-Tentu, ini adalah revisi `README.md` dalam Bahasa Inggris, disusun ulang untuk kejelasan dan profesionalisme yang lebih baik.
-
 -----
 
 ## 📘 SonarQube Automatic Report Generator
