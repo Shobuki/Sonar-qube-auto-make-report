@@ -1,57 +1,132 @@
 import requests
 import json
+import getpass
+import sys
 
 SONAR_URL = "http://localhost:9000"
-COMPONENT = "PUT YOUR COMPONENT HERE"
+COMPONENT = "wfm-dashboardd"  
+TOKEN_NAME = "auto-token-for-script"  
+
+def generate_token(username, password):
+    """Generate user token. Kalau sudah ada, revoke dulu lalu generate ulang."""
+    generate_url = f"{SONAR_URL}/api/user_tokens/generate"
+    params = {"name": TOKEN_NAME}
+
+    print("\nMencoba generate token...")
+    resp = requests.post(generate_url, params=params, auth=(username, password))
+
+    if resp.status_code == 200:
+        data = resp.json()
+        token = data.get("token")
+        print("✅ Token berhasil dibuat baru.")
+        return token
+
+    # Kalau gagal karena token dengan nama itu sudah ada
+    try:
+        data = resp.json()
+    except Exception:
+        data = {}
+
+    msg = ""
+    if isinstance(data, dict):
+        errors = data.get("errors", [])
+        if errors:
+            msg = errors[0].get("msg", "")
+
+    if "already exists" in msg:
+        print("ℹ️  Token dengan nama yang sama sudah ada. Mencoba revoke dulu...")
+
+        revoke_url = f"{SONAR_URL}/api/user_tokens/revoke"
+        revoke_resp = requests.post(revoke_url, params={"name": TOKEN_NAME}, auth=(username, password))
+
+        if revoke_resp.status_code != 204:
+            print("❌ Gagal revoke token lama.")
+            print("Status:", revoke_resp.status_code)
+            print("Response:", revoke_resp.text)
+            sys.exit(1)
+
+        print("✅ Token lama berhasil di-revoke. Generate token baru lagi...")
+
+        # Coba generate ulang
+        resp2 = requests.post(generate_url, params=params, auth=(username, password))
+        if resp2.status_code != 200:
+            print("❌ Gagal generate token setelah revoke.")
+            print("Status:", resp2.status_code)
+            print("Response:", resp2.text)
+            sys.exit(1)
+
+        data2 = resp2.json()
+        token = data2.get("token")
+        print("✅ Token baru berhasil dibuat.")
+        return token
+
+    # Kalau error lain
+    print("❌ Gagal generate token.")
+    print("Status:", resp.status_code)
+    print("Response:", resp.text)
+    sys.exit(1)
 
 
-#put cookies here
-COOKIE_STRING = (
-    "sb-127-auth-token-code-verifier="
-    "\"9e6a1008c4b9906c59d54a22e24dc04ec125d97e376f9ad721d73c3ed75a78546bd9b32bb31e3eca4510411e1dbc4ca0f03cd87fa37377fcd\"; "
-    "sb-127-auth-token="
-    "%7B%22access_token%22%3A%22eyJ%7D; "
-    "ajs_user_id=892291cc-b2d6-5930-99bd-537e73b4b3d6; "
-    "ajs_anonymous_id=1fceb99f-53b1-428b-8e68-abe69acc5460; "
-    "XSRF-TOKEN=bb9edqq7oovng30rnb7ihdn5t; "
-    "JWT-SESSION=eyJhbGciOiJIUzI1NiJ9.eyJsYXN0UmVmcmVzaFRpbWUiOjE3NjM5NjQwNjE4OTgsInhzcmZUb2tlbiI6ImJiOWVkcXE3b292bmczMHJuYjdpaGRuNXQiLCJqdGkiOiJmMzQ1YmI3OS1hNzhiLTQyZGItOWM4OC1lZWY5MzgzOGFmYzgiLCJzdWIiOiI0ZWQ3MjFmYy0zMWZkLTQxNWMtYTFmMC0yN2NkYWQwNzQ0OWQiLCJpYXQiOjE3NjM5NTY5OTEsImV4cCI6MTc2NDIyMzI2MX0.HSZ7sk55Yg2b9YE6esL0cgWQDAZQKj0yuW5JCBz-Bqk"
-)
+def fetch_issues(sonar_token):
+    """Ambil semua issues untuk COMPONENT dan simpan ke sonar_issues.json."""
+    all_issues = []
+    page = 1
+    page_size = 500
+
+    while True:
+        url = f"{SONAR_URL}/api/issues/search"
+        params = {
+            "componentKeys": COMPONENT,
+            "ps": page_size,
+            "p": page
+        }
+
+        print(f"Fetching page {page} ...")
+        r = requests.get(url, auth=(sonar_token, ""), params=params)
+
+        if r.status_code != 200:
+            print("❌ Error saat fetch data:")
+            print("Status:", r.status_code)
+            print("Response:", r.text)
+            break
+
+        try:
+            data = r.json()
+        except requests.exceptions.JSONDecodeError:
+            print("❌ Response bukan JSON.")
+            print("Body snippet:")
+            print(r.text[:500])
+            break
+
+        if "issues" not in data:
+            print("❌ Response tidak berisi 'issues':")
+            print(data)
+            break
+
+        issues = data["issues"]
+        all_issues.extend(issues)
+
+        if len(issues) < page_size:
+            # halaman terakhir
+            break
+
+        page += 1
+
+    print("Total collected:", len(all_issues))
+
+    with open("sonar_issues.json", "w", encoding="utf-8") as f:
+        json.dump({"issues": all_issues}, f, indent=2)
+
+    print("✅ Saved to sonar_issues.json")
 
 
-XSRF_TOKEN_VALUE = "bb9edqq7oovng30rnb7ihdn5t" 
+if __name__ == "__main__":
+    print("=== SonarQube Issue Export ===")
+    username = input("Masukkan username SonarQube: ")
+    password = getpass.getpass("Masukkan password SonarQube: ")
 
+    token = generate_token(username, password)
+    # Kalau mau lihat token sekali:
+    # print("Token:", token)
 
-headers = {
-    "Cookie": COOKIE_STRING,
-    "X-XSRF-TOKEN": XSRF_TOKEN_VALUE
-}
-
-all_issues = []
-page = 1
-page_size = 500
-
-while True:
-    url = f"{SONAR_URL}/api/issues/search?componentKeys={COMPONENT}&ps={page_size}&p={page}"
-    print("Fetching page", page)
-
-    r = requests.get(url, headers=headers)
-    data = r.json()
-
-    if "issues" not in data:
-        print("ERROR:", data)
-        break
-
-    issues = data["issues"]
-    all_issues.extend(issues)
-
-    if len(issues) < page_size:
-        break
-
-    page += 1
-
-print("Total collected:", len(all_issues))
-
-with open("sonar_issues.json", "w", encoding="utf-8") as f:
-    json.dump({"issues": all_issues}, f, indent=2)
-
-print("Saved to sonar_issues.json")
+    fetch_issues(token)
